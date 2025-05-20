@@ -17,7 +17,11 @@ def load_custom_cnn_model():
 
     if not os.path.exists(model_path):
         with st.spinner("⬇️ 正在從 Hugging Face 下載自訂模型..."):
-            response = requests.get(model_url)
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(model_url, headers=headers)
+            if response.status_code != 200:
+                st.error("❌ 模型下載失敗，請確認 Hugging Face 連結是否正確。")
+                st.stop()
             with open(model_path, "wb") as f:
                 f.write(response.content)
             st.success("✅ 模型下載完成！")
