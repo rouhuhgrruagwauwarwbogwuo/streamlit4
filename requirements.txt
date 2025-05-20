@@ -1,7 +1,6 @@
-opencv-python-headless
-tensorflow-cpu==2.10.0
-Pillow
-numpy
-matplotlib
 streamlit
-mtcnn
+tensorflow
+numpy
+opencv-python-headless
+Pillow
+requests
