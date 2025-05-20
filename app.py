@@ -2,172 +2,62 @@ import streamlit as st
 import numpy as np
 import os
 import cv2
-import tempfile
 from PIL import Image
-from tensorflow.keras.applications import ResNet50, EfficientNetB0, Xception
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.applications.resnet50 import preprocess_input as preprocess_resnet
-from tensorflow.keras.applications.efficientnet import preprocess_input as preprocess_efficientnet
-from tensorflow.keras.applications.xception import preprocess_input as preprocess_xception
-import matplotlib.pyplot as plt
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import requests
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.image import img_to_array
 
-st.set_page_config(page_title="Deepfake 偵測器", layout="wide")
-st.title("🧠 Deepfake 圖像偵測器")
+st.set_page_config(page_title="Deepfake 偵測", layout="centered")
 
-# 載入模型
+# ====== 模型下載與載入 ======
 @st.cache_resource
-def load_models():
-    resnet_model = ResNet50(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
-    efficientnet_model = EfficientNetB0(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
-    xception_model = Xception(weights='imagenet', include_top=False, pooling='avg', input_shape=(299, 299, 3))
+def load_custom_cnn_model():
+    model_url = "https://huggingface.co/wuwuwu123123/newmodel/resolve/main/deepfake_cnn_model.h5"
+    model_path = "deepfake_cnn_model.h5"
 
-    resnet_classifier = Sequential([resnet_model, Dense(1, activation='sigmoid')])
-    efficientnet_classifier = Sequential([efficientnet_model, Dense(1, activation='sigmoid')])
-    xception_classifier = Sequential([xception_model, Dense(1, activation='sigmoid')])
+    if not os.path.exists(model_path):
+        with st.spinner("⬇️ 正在從 Hugging Face 下載自訂模型..."):
+            response = requests.get(model_url)
+            with open(model_path, "wb") as f:
+                f.write(response.content)
+            st.success("✅ 模型下載完成！")
 
-    return {
-        'ResNet50': resnet_classifier,
-        'EfficientNet': efficientnet_classifier,
-        'Xception': xception_classifier
-    }
+    model = load_model(model_path)
+    return model
 
-# 使用 OpenCV 提取人臉
-def extract_face_opencv(pil_img):
-    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
-    if len(faces) > 0:
-        x, y, w, h = faces[0]
-        face = np.array(pil_img)[y:y+h, x:x+w]
-        return Image.fromarray(face)
-    return None
+# ====== 圖片預處理 ======
+def preprocess_image(img: Image.Image, target_size=(128, 128)):
+    img = img.convert("RGB")
+    img = img.resize(target_size)
+    img_array = img_to_array(img).astype(np.float32) / 255.0
+    return np.expand_dims(img_array, axis=0)
 
-# 高通濾波
-def high_pass_filter(img):
-    img_np = np.array(img)
-    kernel = np.array([[-1, -1, -1], [-1, 8, -1], [-1, -1, -1]])
-    filtered_img = cv2.filter2D(img_np, -1, kernel)
-    return Image.fromarray(filtered_img)
+# ====== 主程式 ======
+def main():
+    st.title("🧠 Deepfake 圖像偵測系統")
+    st.markdown("上傳一張人臉圖片，我們將使用自訂 CNN 模型進行 Deepfake 分析。")
 
-# CLAHE + 銳化
-def apply_clahe_sharpen(img):
-    img_np = np.array(img)
-    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    cl = clahe.apply(l)
-    lab = cv2.merge((cl, a, b))
-    img_clahe = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-    blurred = cv2.GaussianBlur(img_clahe, (0, 0), 3)
-    sharpened = cv2.addWeighted(img_clahe, 1.5, blurred, -0.5, 0)
-    return Image.fromarray(sharpened)
+    uploaded_file = st.file_uploader("📷 上傳圖片", type=["jpg", "jpeg", "png"])
 
-# 預處理圖像
-def preprocess_image(img, model_name):
-    img = apply_clahe_sharpen(img)
-    img = high_pass_filter(img)
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="上傳圖片", use_container_width=True)
 
-    if model_name == 'Xception':
-        img = img.resize((299, 299))
-        img_array = np.array(img).astype(np.float32)
-        return preprocess_xception(img_array)
-    else:
-        img = img.resize((224, 224))
-        img_array = np.array(img).astype(np.float32)
-        if model_name == 'ResNet50':
-            return preprocess_resnet(img_array)
-        elif model_name == 'EfficientNet':
-            return preprocess_efficientnet(img_array)
-    return img_array
+        # 載入模型
+        model = load_custom_cnn_model()
 
-# 單模型預測
-def predict_model(models, img):
-    predictions = []
-    for name, model in models.items():
-        input_data = preprocess_image(img, name)
-        input_data = np.expand_dims(input_data, axis=0)
-        prediction = model.predict(input_data, verbose=0)
-        predictions.append(prediction[0][0])
-    return predictions
+        # 圖像預處理
+        preprocessed_img = preprocess_image(image)
 
-# 集成預測
-def stacking_predict(models, img, threshold=0.55):  # 設定閥值為0.55
-    preds = predict_model(models, img)
-    avg = np.mean(preds)
-    label = "Deepfake" if avg > threshold else "Real"
-    return label, avg
+        # 預測
+        prediction = model.predict(preprocessed_img)[0][0]
+        label = "🟢 真實 Real" if prediction < 0.5 else "🔴 假的 Deepfake"
+        confidence = prediction if prediction > 0.5 else 1 - prediction
 
-# 顯示預測結果
-def show_prediction(img, models, threshold=0.55):  # 設定閥值為0.55
-    label, confidence = stacking_predict(models, img, threshold)
-    st.image(img, caption="輸入圖像", use_container_width=True)
-    st.subheader(f"預測結果：**{label}**")
-    st.markdown(f"信心分數：**{confidence:.2f}**")
+        st.markdown("---")
+        st.subheader("🔍 偵測結果")
+        st.markdown(f"**判斷：{label}**")
+        st.progress(float(confidence), text=f"信心分數：{confidence:.2%}")
 
-    fig, ax = plt.subplots(figsize=(6, 1))
-    ax.barh([0], confidence, color='green' if label == "Real" else 'red')
-    ax.set_xlim(0, 1)
-    ax.set_yticks([])
-    ax.set_xlabel('信心分數')
-    st.pyplot(fig)
-
-# 主體
-models = load_models()
-tab1, tab2 = st.tabs(["🖼️ 圖像偵測", "🎥 影片偵測"])
-
-with tab1:
-    st.header("上傳圖像進行 Deepfake 偵測")
-    uploaded_image = st.file_uploader("選擇一張圖像", type=["jpg", "jpeg", "png"])
-    if uploaded_image:
-        pil_img = Image.open(uploaded_image).convert("RGB")
-        st.image(pil_img, caption="原始圖像", use_container_width=True)
-
-        face_img = extract_face_opencv(pil_img)
-        if face_img:
-            st.image(face_img, caption="偵測到人臉", width=300)
-            show_prediction(face_img, models, threshold=0.55)
-        else:
-            st.info("⚠️ 沒偵測到人臉，使用整張圖像預測")
-            show_prediction(pil_img, models, threshold=0.55)
-
-with tab2:
-    st.header("影片偵測（處理前幾幀）")
-    uploaded_video = st.file_uploader("選擇一段影片", type=["mp4", "mov", "avi"])
-    if uploaded_video:
-        st.video(uploaded_video)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            tmp.write(uploaded_video.read())
-            video_path = tmp.name
-
-        st.info("🎬 正在分析影片...（取前 10 幀）")
-        cap = cv2.VideoCapture(video_path)
-        frame_idx = 0
-        shown = False
-        max_frames = 10
-        frame_confidences = []
-
-        while cap.isOpened() and frame_idx < max_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if frame_idx % 3 == 0:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_frame = Image.fromarray(rgb)
-                face_img = extract_face_opencv(pil_frame)
-                if face_img:
-                    label, confidence = stacking_predict(models, face_img)
-                    frame_confidences.append((label, confidence))
-                    if not shown:
-                        st.image(pil_frame, caption=f"幀 {frame_idx+1}")
-                        st.write(f"信心分數：{confidence:.2f}")
-                        st.write(f"預測結果：{label}")
-                        shown = True
-                else:
-                    frame_confidences.append(("No face", 0.0))
-            frame_idx += 1
-
-        cap.release()
-        st.write(f"分析結果：{frame_confidences}")
+if __name__ == "__main__":
+    main()
