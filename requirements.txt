@@ -1,7 +1,7 @@
-pip>=23.0
-streamlit
+python==3.10.*
+streamlit==1.15.0
+tensorflow-cpu==2.10.0
 opencv-python-headless
 numpy
 Pillow
 requests
-tensorflow-cpu==2.10.0
