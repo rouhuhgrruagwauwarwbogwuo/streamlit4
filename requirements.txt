@@ -4,3 +4,4 @@ opencv-python-headless
 numpy
 Pillow
 requests
+python>=3.8,<3.12
